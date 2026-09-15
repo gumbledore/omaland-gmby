@@ -13,6 +13,10 @@ QtObject {
   property var shell: null
   property var manifest: null
 
+  // The shell strips __sourceDir from the manifest it hands third-party
+  // plugins, so the directory comes from this file's own location.
+  readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
+
   readonly property string dest: Quickshell.env("HOME") + "/.local/share/applications/omaland.desktop"
   readonly property string marker: "^X-Omaland-Managed=true$"
 
@@ -33,8 +37,7 @@ QtObject {
   // Component.onCompleted, and a binding on it has not re-evaluated by the
   // time this fires, so the paths are built here rather than bound.
   onManifestChanged: {
-    var dir = manifest && manifest.__sourceDir
-    if (installed || !dir) return
+    if (installed || !manifest || !dir) return
     installed = true
     Quickshell.execDetached(["sh", "-c", installScript, "sh",
                              dir + "/omaland.desktop", dest, marker, dir + "/icon.png"])
