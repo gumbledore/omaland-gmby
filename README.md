@@ -44,7 +44,10 @@ the **Omarchy** preset first to undo them too.
 | **Snappy** | scrolling | Near stock, animations twice as fast, no dimming. |
 
 Applying a preset clears every override in both managed files and writes the
-preset's own, so a preset is a complete known state. The card matching what is
+preset's own, so a preset is a complete known state. A preset that names a
+layout also removes the per-workspace pins left by Omarchy's workspace layout
+toggle (`~/.local/state/omarchy/workspace-layouts/`), which load after
+`looknfeel.lua` and would otherwise win over the preset's layout. The card matching what is
 on disk carries a dot; hand-tuned settings match no card, and the footer says
 so. Browsing never touches your files: Escape puts the desktop back exactly.
 

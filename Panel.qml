@@ -183,7 +183,9 @@ Item {
   }
 
   // A preset is a complete known state: every override in both files goes,
-  // then the preset's own are written.
+  // then the preset's own are written. A preset that names a layout also
+  // drops Omarchy's per-workspace layout pins, which load after looknfeel.lua
+  // and would otherwise silently win over general:layout.
   function applyPreset(index) {
     var preset = Presets.PRESETS[index]
     if (!preset) return
@@ -192,7 +194,8 @@ Item {
     root.overrides = next
     root.previewTouched = ({})
     root.pendingPreview = ""
-    persistNow()
+    if (next["general:layout"] !== undefined) clearLayoutPins.running = true
+    else persistNow()
     dismiss()
   }
 
@@ -497,6 +500,14 @@ Item {
       root.pendingPreview = ""
       Qt.callLater(function() { root.livePreviewOf(next) })
     }
+  }
+
+  // Written by omarchy-hyprland-workspace-layout-toggle. Removed before the
+  // write lands, so the reload that follows sees no pins.
+  Process {
+    id: clearLayoutPins
+    command: ["sh", "-c", 'rm -f -- "$1"/*.lua', "sh", root.home + "/.local/state/omarchy/workspace-layouts"]
+    onExited: root.persistNow()
   }
 
   Process {
