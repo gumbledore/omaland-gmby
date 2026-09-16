@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Omaland Themepark
+GenericName=Hyprland Look and Feel
+Comment=Pick a look for your windows: gaps, corners, opacity, blur and shadow, with live preview
+Exec=omarchy-shell shell toggle gumbledore.omaland-themepark
+TryExec=omarchy-shell
+Icon=@ICON@
+Terminal=false
+StartupNotify=false
+Categories=Settings;DesktopSettings;
+Keywords=hyprland;omarchy;theme;preset;gaps;blur;opacity;animations;rounding;shadow;
+X-Omaland-Themepark-Managed=true
