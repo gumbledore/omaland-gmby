@@ -50,7 +50,7 @@ var PRESETS = [
   {
     id: "glass",
     name: "Glass",
-    description: "Strong blur under translucent windows, with a glow on focus.",
+    description: "Strong blur under translucent windows, with a soft glow on focus.",
     overrides: {
       "general:layout": "dwindle",
       "general:border_size": 1,
@@ -62,8 +62,8 @@ var PRESETS = [
       "decoration:blur:passes": 3,
       "decoration:blur:vibrancy": 0.3,
       "decoration:glow:enabled": true,
-      "decoration:glow:range": 20,
-      "decoration:glow:render_power": 2
+      "decoration:glow:range": 10,
+      "decoration:glow:render_power": 3
     }
   },
   {
