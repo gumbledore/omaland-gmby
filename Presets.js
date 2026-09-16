@@ -53,6 +53,8 @@ var PRESETS = [
     description: "Strong blur under translucent windows, with a soft glow on focus.",
     overrides: {
       "general:layout": "dwindle",
+      "general:gaps_in": 0,
+      "general:gaps_out": 0,
       "general:border_size": 1,
       "decoration:rounding": 10,
       "decoration:active_opacity": 0.92,
