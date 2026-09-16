@@ -6,6 +6,7 @@
   "author": "Kevin Goff",
   "description": "A picker of curated looks for Hyprland windows, with live preview and a full option editor behind Tab. Writes a managed block into ~/.config/hypr/looknfeel.lua. Open from SUPER+SPACE by searching 'Omaland Themepark' or from the terminal with: omarchy-shell shell toggle gumbledore.omaland-themepark",
   "kinds": ["panel", "service"],
+  "keepLoaded": true,
   "entryPoints": {
     "panel": "Panel.qml",
     "service": "Service.qml"

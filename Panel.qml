@@ -51,6 +51,7 @@ Item {
   property var previewTouched: ({})
   property string pendingPreview: ""
   property bool quietReload: false
+  property bool dismissAfterReload: false
 
   readonly property int matchingIndex: {
     var found = Presets.matching(root.overrides)
@@ -194,9 +195,12 @@ Item {
     root.overrides = next
     root.previewTouched = ({})
     root.pendingPreview = ""
+    // The panel stays up until the reload has run: a hidden panel can be
+    // torn down by the shell, and with it the write-then-reload chain.
+    root.dismissAfterReload = true
+    root.statusText = "Applying…"
     if (next["general:layout"] !== undefined) clearLayoutPins.running = true
     else persistNow()
-    dismiss()
   }
 
   function toggle() {
@@ -362,6 +366,7 @@ Item {
   function noteSaveFailed(which) {
     root.pendingSaves = 0
     root.selfWrite = false
+    root.dismissAfterReload = false
     root.statusText = ""
     root.errorText = "Could not write " + which
   }
@@ -516,6 +521,10 @@ Item {
     onExited: {
       errorsProc.running = true
       root.refresh()
+      if (root.dismissAfterReload) {
+        root.dismissAfterReload = false
+        root.dismiss()
+      }
     }
   }
 
