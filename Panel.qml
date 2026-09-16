@@ -7,8 +7,10 @@ import qs.Commons
 import qs.Ui
 import "Schema.js" as Schema
 import "LuaConfig.js" as LuaConfig
+import "Presets.js" as Presets
 
-// Omaland — a GUI for the visual half of ~/.config/hypr/looknfeel.lua.
+// Omaland Themepark — a preset picker for the visual half of
+// ~/.config/hypr/looknfeel.lua, with the full option editor behind Tab.
 //
 // One renderer feeds both paths, so they can't drift:
 //   preview   hyprctl eval <body>   — instant, in memory, discarded by reload
@@ -25,18 +27,42 @@ Item {
   property var manifest: null
 
   readonly property string home: Quickshell.env("HOME")
-  readonly property string pluginDir: (manifest && manifest.__sourceDir) || (home + "/.config/omarchy/plugins/bobbynicholas.omaland")
+  readonly property string pluginDir: (manifest && manifest.__sourceDir) || (home + "/.config/omarchy/plugins/gumbledore.omaland-themepark")
   readonly property string configPath: home + "/.config/hypr/looknfeel.lua"
   readonly property string windowsPath: home + "/.config/hypr/hyprland.lua"
+  readonly property string wallpaperPath: home + "/.local/state/omarchy/current/background"
   readonly property string displayPath: overrides[Schema.OPAQUE_WINDOWS_KEY] === true
     ? "~/.config/hypr/looknfeel.lua + hyprland.lua"
     : "~/.config/hypr/looknfeel.lua"
 
   property bool opened: false
 
+  // "picker" is the carousel of presets; "editor" is the full option list.
+  // The panel always opens on the picker.
+  property string view: "picker"
+
   property var overrides: ({})          // what the managed blocks set
   property var effective: ({})          // what Hyprland reports right now
   property var animationBaseline: []    // Omarchy's shipped animation set
+
+  // Keys the picker has previewed on the real desktop since opening. A card
+  // that leaves one of them alone previews the on-disk value for it, so moving
+  // between cards never leaves a stray setting behind.
+  property var previewTouched: ({})
+  property string pendingPreview: ""
+  property bool quietReload: false
+  property bool dismissAfterReload: false
+
+  readonly property int matchingIndex: {
+    var found = Presets.matching(root.overrides)
+    return found ? Presets.PRESETS.indexOf(found) : -1
+  }
+  // The disk state lands after open() has already seeded the carousel, so
+  // follow it until the user starts browsing.
+  onMatchingIndexChanged: {
+    if (root.opened && root.view === "picker" && Object.keys(root.previewTouched).length === 0)
+      carousel.reset()
+  }
 
   // Kept apart so reloading one file can't drop the other's keys.
   property var diskConfig: ({})
@@ -47,7 +73,6 @@ Item {
   property int cursorIndex: 0
   property string errorText: ""
   property string statusText: ""
-  property bool previewPending: false
   property bool selfWrite: false
 
   property color background: Color.menu.background
@@ -80,25 +105,102 @@ Item {
   // ------------------------------------------------------------- lifecycle
 
   function open(payloadJson) {
+    root.view = "picker"
+    root.previewTouched = ({})
     root.opened = true
     configFile.reload()
     windowsFile.reload()
     defaultsFile.reload()
     refresh()
-    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    carousel.reset()
+    Qt.callLater(root.focusView)
   }
 
   function close() {
     // The preview is already live, so a pending edit has to reach the file
     // rather than evaporating at the next reload.
     if (persistTimer.running) persistNow()
+    revertPreview()
     root.opened = false
   }
 
   function dismiss() {
     if (root.shell && typeof root.shell.hide === "function")
-      root.shell.hide((root.manifest && root.manifest.id) || "omaland")
+      root.shell.hide((root.manifest && root.manifest.id) || "omaland-themepark")
     else close()
+  }
+
+  function focusView() {
+    if (root.view === "picker") carousel.forceActiveFocus()
+    else keyCatcher.forceActiveFocus()
+  }
+
+  // Tab from the picker. The preview is undone first, so the editor opens on
+  // what is on disk and never silently commits a card.
+  function showEditor() {
+    revertPreview()
+    root.view = "editor"
+    focusView()
+  }
+
+  function showPicker() {
+    if (persistTimer.running) persistNow()
+    root.view = "picker"
+    carousel.reset()
+    focusView()
+  }
+
+  // ---------------------------------------------------------------- presets
+
+  function previewPreset(index) {
+    var preset = Presets.PRESETS[index]
+    if (!preset) return
+    var untouched = Object.keys(root.previewTouched).length === 0
+    if (untouched && index === root.matchingIndex) return
+
+    var wanted = Presets.previewOverrides(preset.overrides)
+    var touched = {}
+    for (var t in root.previewTouched) touched[t] = true
+    for (var w in wanted) touched[w] = true
+
+    var body = {}
+    for (var k in touched) {
+      if (wanted[k] !== undefined) { body[k] = wanted[k]; continue }
+      var item = Schema.itemFor(k)
+      if (item) body[k] = valueFor(item)
+    }
+    root.previewTouched = touched
+    livePreviewOf(LuaConfig.renderPreview(body, root.animationBaseline))
+  }
+
+  // Hyprland has no "unset", so the exact way back is the file: a reload drops
+  // everything eval put in memory.
+  function revertPreview() {
+    if (Object.keys(root.previewTouched).length === 0) return
+    root.previewTouched = ({})
+    root.pendingPreview = ""
+    root.quietReload = true
+    reloadProc.running = true
+  }
+
+  // A preset is a complete known state: every override in both files goes,
+  // then the preset's own are written. A preset that names a layout also
+  // drops Omarchy's per-workspace layout pins, which load after looknfeel.lua
+  // and would otherwise silently win over general:layout.
+  function applyPreset(index) {
+    var preset = Presets.PRESETS[index]
+    if (!preset) return
+    var next = {}
+    for (var k in preset.overrides) next[k] = preset.overrides[k]
+    root.overrides = next
+    root.previewTouched = ({})
+    root.pendingPreview = ""
+    // The panel stays up until the reload has run: a hidden panel can be
+    // torn down by the shell, and with it the write-then-reload chain.
+    root.dismissAfterReload = true
+    root.statusText = "Applying…"
+    if (next["general:layout"] !== undefined) clearLayoutPins.running = true
+    else persistNow()
   }
 
   function toggle() {
@@ -210,11 +312,14 @@ Item {
   // --------------------------------------------------------------- writing
 
   function livePreview() {
-    var body = LuaConfig.renderPreview(root.overrides, root.animationBaseline)
+    livePreviewOf(LuaConfig.renderPreview(root.overrides, root.animationBaseline))
+  }
+
+  function livePreviewOf(body) {
     if (!body) return
     // One eval in flight at a time with the newest state queued behind it, so
     // a slider drag can't outrun hyprctl.
-    if (evalProc.running) { root.previewPending = true; return }
+    if (evalProc.running) { root.pendingPreview = body; return }
     evalProc.command = ["hyprctl", "eval", body]
     evalProc.running = true
   }
@@ -261,6 +366,7 @@ Item {
   function noteSaveFailed(which) {
     root.pendingSaves = 0
     root.selfWrite = false
+    root.dismissAfterReload = false
     root.statusText = ""
     root.errorText = "Could not write " + which
   }
@@ -394,10 +500,19 @@ Item {
   Process {
     id: evalProc
     onExited: {
-      if (!root.previewPending) return
-      root.previewPending = false
-      Qt.callLater(root.livePreview)
+      var next = root.pendingPreview
+      if (!next) return
+      root.pendingPreview = ""
+      Qt.callLater(function() { root.livePreviewOf(next) })
     }
+  }
+
+  // Written by omarchy-hyprland-workspace-layout-toggle. Removed before the
+  // write lands, so the reload that follows sees no pins.
+  Process {
+    id: clearLayoutPins
+    command: ["sh", "-c", 'rm -f -- "$1"/*.lua', "sh", root.home + "/.local/state/omarchy/workspace-layouts"]
+    onExited: root.persistNow()
   }
 
   Process {
@@ -406,6 +521,10 @@ Item {
     onExited: {
       errorsProc.running = true
       root.refresh()
+      if (root.dismissAfterReload) {
+        root.dismissAfterReload = false
+        root.dismiss()
+      }
     }
   }
 
@@ -419,7 +538,9 @@ Item {
       onStreamFinished: {
         var out = String(text || "").trim()
         root.errorText = (out === "" || out === "no errors") ? "" : out
-        if (root.errorText === "") root.statusText = "Saved"
+        // A reload that only undid a preview saved nothing.
+        if (root.errorText === "" && !root.quietReload) root.statusText = "Saved"
+        root.quietReload = false
       }
     }
   }
@@ -494,7 +615,7 @@ Item {
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
-    WlrLayershell.namespace: "omaland"
+    WlrLayershell.namespace: "omaland-themepark"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
 
@@ -508,11 +629,13 @@ Item {
       }
     }
 
+    // The picker is wide and short, the editor tall: each view gets the shape
+    // its content needs, and the surface resizes on Tab.
     BorderSurface {
       id: card
       anchors.centerIn: parent
-      width: Math.min(Style.space(780), window.width - Style.gapsOut * 4)
-      height: Math.min(Style.space(620), window.height - Style.gapsOut * 4)
+      width: Math.min(root.view === "picker" ? Style.space(1040) : Style.space(780), window.width - Style.gapsOut * 4)
+      height: Math.min(root.view === "picker" ? Style.space(475) : Style.space(620), window.height - Style.gapsOut * 4)
       radius: Style.cornerRadius
       color: root.background
       borderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, Math.max(1, Style.space(2)))
@@ -520,10 +643,130 @@ Item {
 
       MouseArea { anchors.fill: parent; onClicked: {} }
 
+      // ------------------------------------------------------------ picker
+
+      ColumnLayout {
+        visible: root.view === "picker"
+        anchors.fill: parent
+        anchors.topMargin: card.contentTopInset
+        anchors.rightMargin: card.contentRightInset
+        anchors.bottomMargin: card.contentBottomInset
+        anchors.leftMargin: card.contentLeftInset
+        spacing: Style.spacing.panelGap
+
+        Item {
+          Layout.fillWidth: true
+          Layout.preferredHeight: Math.max(pickerTitle.implicitHeight, pickerActions.implicitHeight)
+
+          Column {
+            id: pickerTitle
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.spacing.xxs
+
+            Text {
+              text: "Omaland Themepark"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.heading
+              font.bold: true
+            }
+
+            Text {
+              text: "Pick a look for your windows. Arrow to preview, Enter to apply."
+              color: Qt.darker(root.foreground, 1.6)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          Row {
+            id: pickerActions
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.spacing.lg
+
+            Button {
+              text: "Customize"
+              bordered: true
+              foreground: root.foreground
+              accent: root.accent
+              fontFamily: root.fontFamily
+              anchors.verticalCenter: parent.verticalCenter
+              onClicked: root.showEditor()
+            }
+
+            PanelActionButton {
+              iconText: "󰅖"
+              tooltipText: "Close  ·  Esc"
+              foreground: root.foreground
+              anchors.verticalCenter: parent.verticalCenter
+              onClicked: root.dismiss()
+            }
+          }
+        }
+
+        PanelSeparator { foreground: root.foreground; Layout.fillWidth: true }
+
+        PresetCarousel {
+          id: carousel
+          Layout.fillWidth: true
+          Layout.fillHeight: true
+          focus: root.view === "picker"
+          presets: Presets.PRESETS
+          matchingIndex: root.matchingIndex
+          wallpaper: root.wallpaperPath
+          background: root.background
+          foreground: root.foreground
+          accent: root.accent
+          fontFamily: root.fontFamily
+          nameSize: Style.font.subtitle
+          descriptionSize: Style.font.caption
+          focusedWidth: Style.space(300)
+          sideWidth: Style.space(124)
+          spacing: Style.spacing.sm
+          onPreviewed: function(index) { root.previewPreset(index) }
+          onApplied: function(index) { root.applyPreset(index) }
+          onCancelled: root.dismiss()
+          onCustomizeRequested: root.showEditor()
+        }
+
+        PanelSeparator { foreground: root.foreground; Layout.fillWidth: true }
+
+        Item {
+          Layout.fillWidth: true
+          Layout.preferredHeight: pickerFooter.implicitHeight + Style.spacing.md
+
+          Text {
+            id: pickerFooter
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            text: {
+              if (root.errorText !== "") return root.errorText
+              if (root.statusText !== "") return root.statusText
+              var keys = "←→ hl browse · 1–6 jump · Enter apply · Tab customize · Esc close"
+              return carousel.customNoteVisible ? "Custom settings in effect   —   " + keys : keys
+            }
+            color: root.errorText !== "" ? Color.urgent
+                 : carousel.customNoteVisible && root.statusText === "" ? root.accent
+                 : Qt.darker(root.foreground, 1.6)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+            maximumLineCount: 2
+            wrapMode: Text.WordWrap
+          }
+        }
+      }
+
+      // ------------------------------------------------------------ editor
+
       Item {
         id: keyCatcher
         anchors.fill: parent
-        focus: true
+        visible: root.view === "editor"
+        focus: root.view === "editor"
 
         Keys.onPressed: function(event) {
           // hjkl mirrors the arrows, but only unmodified, so Ctrl+L and friends
@@ -544,10 +787,12 @@ Item {
             root.nudge(-1); event.accepted = true
           }
           // Back-tab arrives as Key_Backtab or as a shifted Key_Tab depending
-          // on compositor and keymap.
+          // on compositor and keymap. Shift+Tab walks back through the
+          // sections and, from the first one, back to the picker.
           else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
             var back = event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier)
-            root.moveSection(back ? -1 : 1)
+            if (back && root.sectionIndex === 0) root.showPicker()
+            else root.moveSection(back ? -1 : 1)
             event.accepted = true
           }
           else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
@@ -559,6 +804,7 @@ Item {
       }
 
       ColumnLayout {
+        visible: root.view === "editor"
         anchors.fill: parent
         anchors.topMargin: card.contentTopInset
         anchors.rightMargin: card.contentRightInset
@@ -577,7 +823,7 @@ Item {
             spacing: Style.spacing.xxs
 
             Text {
-              text: "Omaland"
+              text: "Omaland Themepark · Customize"
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.heading
@@ -618,6 +864,16 @@ Item {
               fontFamily: root.fontFamily
               anchors.verticalCenter: parent.verticalCenter
               onClicked: root.resetAll()
+            }
+
+            Button {
+              text: "Presets"
+              bordered: true
+              foreground: root.foreground
+              accent: root.accent
+              fontFamily: root.fontFamily
+              anchors.verticalCenter: parent.verticalCenter
+              onClicked: root.showPicker()
             }
 
             PanelActionButton {
@@ -772,7 +1028,7 @@ Item {
             text: {
               if (root.errorText !== "") return root.errorText
               if (root.statusText !== "") return root.statusText
-              return "↑↓ kj row · ←→ hl adjust · Tab section · Backspace reset · Esc close"
+              return "↑↓ kj row · ←→ hl adjust · Tab section · Shift+Tab back to presets · Backspace reset · Esc close"
                 + "   —   border colors stay with your theme"
             }
             color: root.errorText !== "" ? Color.urgent : Qt.darker(root.foreground, 1.6)
@@ -788,7 +1044,7 @@ Item {
   }
 
   IpcHandler {
-    target: "omaland"
+    target: "omaland-themepark"
     function open(): void { root.open("{}") }
     function close(): void { root.dismiss() }
     function toggle(): void { root.toggle() }

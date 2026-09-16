@@ -1,11 +1,13 @@
-// Pure-JS tests for the two library files. QML's `.pragma library` header is
-// stripped so node can evaluate them; nothing else about the modules changes.
+// Tests for the library files and the pure-QtQuick components. QML's
+// `.pragma library` header is stripped so node can evaluate the JS; the QML
+// cases in test/qml run under qmltestrunner (shipped with Qt 6 on Omarchy)
+// and are skipped with a message when that binary is absent.
 //
 //   node test/run.js
 
 const fs = require("fs")
 const path = require("path")
-const { execFileSync } = require("child_process")
+const { execFileSync, spawnSync } = require("child_process")
 
 const root = path.join(__dirname, "..")
 
@@ -17,12 +19,13 @@ function load(file, exports) {
 }
 
 const Schema = load("Schema.js", [
-  "SECTIONS", "ANIMATION_SPEED_KEY", "allItems", "itemFor", "queryKeys", "quantize"
+  "SECTIONS", "ANIMATION_SPEED_KEY", "OPAQUE_WINDOWS_KEY", "allItems", "itemFor", "queryKeys", "quantize"
 ])
 const Lua = load("LuaConfig.js", [
   "renderBlock", "renderConfigBody", "renderWindowsBody", "renderPreview",
   "parseHarness", "animationSpeedFrom", "applyBlock", "splitBlock"
 ])
+const Presets = load("Presets.js", ["PRESETS", "matching", "previewOverrides"])
 
 let failures = 0
 function check(name, condition, detail) {
@@ -236,6 +239,126 @@ if (baseline.length === 0) {
   check("read.lua rejects broken Lua loudly", (function() {
     try { readSource("hl.config({ this is not lua"); return false } catch (e) { return true }
   })())
+}
+
+console.log("\nPresets")
+
+const presets = Presets.PRESETS
+eq("exactly six presets", presets.length, 6)
+eq("ids are unique", new Set(presets.map(function(p) { return p.id })).size, presets.length)
+eq("Omarchy comes first", presets[0].id, "omarchy")
+eq("Omarchy is the empty map", presets[0].overrides, {})
+check("every preset has a name and description", presets.every(function(p) {
+  return typeof p.name === "string" && p.name !== "" && typeof p.description === "string" && p.description !== ""
+}))
+
+check("every override key names a schema item and is already quantized", presets.every(function(p) {
+  return Object.keys(p.overrides).every(function(k) {
+    const item = Schema.itemFor(k)
+    return item && Schema.quantize(item, p.overrides[k]) === p.overrides[k]
+  })
+}), presets.map(function(p) {
+  return p.id + ": " + Object.keys(p.overrides).filter(function(k) {
+    const item = Schema.itemFor(k)
+    return !item || Schema.quantize(item, p.overrides[k]) !== p.overrides[k]
+  }).join(",")
+}).join(" "))
+
+check("no preset sets a color", presets.every(function(p) {
+  return Object.keys(p.overrides).every(function(k) {
+    return k.split(":").every(function(seg) { return seg !== "col" && seg.indexOf("color") === -1 })
+  })
+}))
+
+check("presets are pairwise distinct", presets.every(function(a, i) {
+  return presets.every(function(b, j) { return i === j || stable(a.overrides) !== stable(b.overrides) })
+}))
+
+presets.forEach(function(p) {
+  const config = readBlock(Lua.applyBlock("", Lua.renderConfigBody(p.overrides, baseline)))
+  const back = config.overrides
+  if (baseline.length > 0) {
+    const speed = Lua.animationSpeedFrom(config.animations, baseline)
+    if (speed !== undefined) back[Schema.ANIMATION_SPEED_KEY] = speed
+  }
+  const windows = Lua.renderWindowsBody(p.overrides)
+  if (windows && readSource(windows).opaque) back[Schema.OPAQUE_WINDOWS_KEY] = true
+  const expected = {}
+  for (const k in p.overrides) {
+    if (k === Schema.ANIMATION_SPEED_KEY && baseline.length === 0) continue
+    expected[k] = p.overrides[k]
+  }
+  eq(p.id + " round-trips through Lua", back, expected)
+})
+
+presets.forEach(function(p) {
+  check("matching() finds " + p.id + " from its own overrides",
+        Presets.matching(p.overrides) === p)
+})
+check("matching() finds a copy, not just the same object", Presets.matching(JSON.parse(JSON.stringify(presets[1].overrides))) === presets[1])
+check("matching() rejects a tweaked copy", presets.slice(1).every(function(p) {
+  const tweaked = JSON.parse(JSON.stringify(p.overrides))
+  const k = Object.keys(tweaked)[0]
+  tweaked[k] = typeof tweaked[k] === "boolean" ? !tweaked[k] : typeof tweaked[k] === "number" ? tweaked[k] + 1 : tweaked[k] + "x"
+  return Presets.matching(tweaked) === null
+}))
+check("matching() rejects a superset", Presets.matching(Object.assign({ "decoration:glow:range": 9 }, presets[1].overrides)) === null)
+check("matching() rejects a subset", presets.slice(1).every(function(p) {
+  const sub = JSON.parse(JSON.stringify(p.overrides))
+  delete sub[Object.keys(sub)[0]]
+  return Presets.matching(sub) !== p
+}))
+check("the empty map matches only Omarchy", Presets.matching({}) === presets[0])
+check("undefined matches nothing", Presets.matching(undefined) === null)
+
+const byId = {}
+presets.forEach(function(p) { byId[p.id] = p })
+eq("Tight tiles as scrolling", byId.tight.overrides["general:layout"], "scrolling")
+eq("Snappy tiles as scrolling", byId.snappy.overrides["general:layout"], "scrolling")
+check("the others leave the layout alone or pick dwindle", ["omarchy", "airy", "glass", "focus"].every(function(id) {
+  const l = byId[id].overrides["general:layout"]
+  return l === undefined || l === "dwindle"
+}))
+check("previewOverrides drops the layout and nothing else", presets.every(function(p) {
+  const pv = Presets.previewOverrides(p.overrides)
+  if (pv["general:layout"] !== undefined) return false
+  return Object.keys(p.overrides).every(function(k) { return k === "general:layout" || pv[k] === p.overrides[k] })
+    && Object.keys(pv).every(function(k) { return p.overrides[k] !== undefined })
+}))
+
+console.log("\nQML components")
+
+function findQmlTestRunner() {
+  const candidates = ["/usr/lib/qt6/bin/qmltestrunner", "qmltestrunner", "qmltestrunner6"]
+  for (const c of candidates) {
+    const probe = spawnSync(c, ["--help"], { stdio: "ignore" })
+    if (!probe.error) return c
+  }
+  return null
+}
+
+const runner = findQmlTestRunner()
+if (!runner) {
+  console.log("  skip (qmltestrunner not found; install qt6-declarative to run test/qml)")
+} else {
+  // Headless: no display, and no GTK platform theme trying to open one.
+  const env = Object.assign({}, process.env, { QT_QPA_PLATFORM: "offscreen", QT_QPA_PLATFORMTHEME: "" })
+  delete env.DISPLAY
+  delete env.WAYLAND_DISPLAY
+  const qml = spawnSync(runner, ["-input", path.join(__dirname, "qml")], { env: env, encoding: "utf8" })
+  const lines = (qml.stdout || "").split("\n")
+  lines.filter(function(l) { return /^(PASS|FAIL!|XFAIL|SKIP)/.test(l) }).forEach(function(l) {
+    const m = l.match(/^(\S+)\s*:\s*qmltestrunner::(\S+)\(\)(.*)$/)
+    if (!m) return
+    if (/TestCase$/.test(m[2])) return
+    if (m[1] === "PASS") console.log("  ok   " + m[2])
+    else { failures++; console.log("  FAIL " + m[2] + m[3]) }
+  })
+  const totals = lines.filter(function(l) { return l.indexOf("Totals:") === 0 })[0]
+  if (qml.status !== 0 && !totals) {
+    failures++
+    console.log("  FAIL qmltestrunner did not run\n" + (qml.stderr || qml.stdout || String(qml.error)))
+  }
 }
 
 console.log("")

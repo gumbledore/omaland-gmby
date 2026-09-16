@@ -1,11 +1,12 @@
 {
   "schemaVersion": 1,
-  "id": "bobbynicholas.omaland",
-  "name": "Omaland",
-  "version": "1.0.0",
-  "author": "Bobby Nicholas",
-  "description": "A panel for editing Hyprland's visual look and feel, with live preview. Writes a managed block into ~/.config/hypr/looknfeel.lua. Open from the Omarchy menu by searching 'Omaland' or from the terminal with: omarchy-shell shell toggle bobbynicholas.omaland",
+  "id": "gumbledore.omaland-themepark",
+  "name": "Omaland Themepark",
+  "version": "2.0.0",
+  "author": "Kevin Goff",
+  "description": "A picker of curated looks for Hyprland windows, with live preview and a full option editor behind Tab. Writes a managed block into ~/.config/hypr/looknfeel.lua. Open from SUPER+SPACE by searching 'Omaland Themepark' or from the terminal with: omarchy-shell shell toggle gumbledore.omaland-themepark",
   "kinds": ["panel", "service"],
+  "keepLoaded": true,
   "entryPoints": {
     "panel": "Panel.qml",
     "service": "Service.qml"
