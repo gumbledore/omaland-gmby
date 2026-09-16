@@ -56,6 +56,12 @@ Item {
     var found = Presets.matching(root.overrides)
     return found ? Presets.PRESETS.indexOf(found) : -1
   }
+  // The disk state lands after open() has already seeded the carousel, so
+  // follow it until the user starts browsing.
+  onMatchingIndexChanged: {
+    if (root.opened && root.view === "picker" && Object.keys(root.previewTouched).length === 0)
+      carousel.reset()
+  }
 
   // Kept apart so reloading one file can't drop the other's keys.
   property var diskConfig: ({})
